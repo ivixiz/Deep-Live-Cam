@@ -76,7 +76,7 @@ def get_face_swapper() -> Any:
         if FACE_SWAPPER is None:
             model_name = "inswapper_128.onnx"
             if "CUDAExecutionProvider" in modules.globals.execution_providers:
-                model_name = "inswapper_128_fp16.onnx"
+                model_name = "inswapper_128.onnx"
             model_path = os.path.join(models_dir, model_name)
             update_status(f"Loading face swapper model from: {model_path}", NAME)
             try:
@@ -506,7 +506,7 @@ def process_frame_v2(temp_frame: Frame, temp_frame_path: str = "") -> Frame:
                                      source_target_pairs.append((source_faces[i], detected_faces_with_embedding[closest_idx]))
             else: # Fallback: if no map, use default source for the single detected face (if any)
                 source_face = default_source_face()
-                target_face = get_one_face(processed_frame, detected_faces) # Use faces already detected
+                target_face = get_one_face(processed_frame)#, detected_faces) # Use faces already detected
                 if source_face and target_face:
                     source_target_pairs.append((source_face, target_face))
 
@@ -717,7 +717,7 @@ def process_video(source_path: str, temp_frame_paths: List[str]) -> None:
 
 def create_lower_mouth_mask(
     face: Face, frame: Frame
-) -> (np.ndarray, np.ndarray, tuple, np.ndarray):
+) -> tuple[np.ndarray, np.ndarray, tuple, np.ndarray]:
     mask = np.zeros(frame.shape[:2], dtype=np.uint8)
     mouth_cutout = None
     lower_lip_polygon = None # Initialize
@@ -1064,65 +1064,31 @@ def apply_mouth_area(
 def create_face_mask(face: Face, frame: Frame) -> np.ndarray:
     """Creates a feathered mask covering the whole face area based on landmarks."""
     mask = np.zeros(frame.shape[:2], dtype=np.uint8) # Start with uint8
-
-    # Validate inputs
     if face is None or not hasattr(face, 'landmark_2d_106') or frame is None:
-        # print("Warning: Invalid face or frame for create_face_mask.")
         return mask # Return empty mask
-
     landmarks = face.landmark_2d_106
     if landmarks is None or not isinstance(landmarks, np.ndarray) or landmarks.shape[0] < 106:
-        # print("Warning: Invalid or insufficient landmarks for face mask.")
         return mask # Return empty mask
-
     try: # Wrap main logic in try-except
-        # Filter out non-finite landmark values
         if not np.all(np.isfinite(landmarks)):
-            # print("Warning: Non-finite values detected in landmarks for face mask.")
             return mask
-
         landmarks_int = landmarks.astype(np.int32)
-
-        # Use standard face outline landmarks (0-32)
         face_outline_points = landmarks_int[0:33] # Points 0 to 32 cover chin and sides
-
-
-        # Calculate convex hull of these points
-        # Use try-except as convexHull can fail on degenerate input
         try:
-             hull = cv2.convexHull(full_face_poly.astype(np.float32)) # Use float for accuracy
+             hull = cv2.convexHull(face_outline_points.astype(np.float32)) # Use float for accuracy
              if hull is None or len(hull) < 3:
-                 # print("Warning: Convex hull calculation failed or returned too few points.")
-                 # Fallback: use bounding box of landmarks? Or just return empty mask?
                  return mask
-
-             # Draw the filled convex hull on the mask
              cv2.fillConvexPoly(mask, hull.astype(np.int32), 255)
         except Exception as hull_e:
              print(f"Error creating convex hull for face mask: {hull_e}")
              return mask # Return empty mask on error
-
-
-        # Apply Gaussian blur to feather the mask edges
-        # Kernel size should be reasonably large, odd, and positive
         blur_k_size = getattr(modules.globals, "face_mask_blur", 31) # Default 31
         blur_k_size = max(1, blur_k_size // 2 * 2 + 1) # Ensure odd and positive
-
-        # Use sigma=0 to let OpenCV calculate from kernel size
-        # Apply blur to the uint8 mask directly
         mask = cv2.GaussianBlur(mask, (blur_k_size, blur_k_size), 0)
-
-        # --- Optional: Return float mask for apply_mouth_area ---
-        # mask = mask.astype(float) / 255.0
-        # ---
-
     except IndexError:
-        # print("Warning: Landmark index out of bounds for face mask.") # Optional debug
         pass
     except Exception as e:
         print(f"Error creating face mask: {e}") # Print unexpected errors
-        # import traceback
-        # traceback.print_exc()
         pass
 
     return mask # Return uint8 mask

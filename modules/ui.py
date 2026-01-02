@@ -1,3 +1,4 @@
+
 import os
 import webbrowser
 import customtkinter as ctk
@@ -139,13 +140,10 @@ def load_switch_states():
 
 def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.CTk:
     global source_label, target_label, status_label, show_fps_switch
-
     load_switch_states()
-
     ctk.deactivate_automatic_dpi_awareness()
     ctk.set_appearance_mode("system")
     ctk.set_default_color_theme(resolve_relative_path("ui.json"))
-
     root = ctk.CTk()
     root.minsize(ROOT_WIDTH, ROOT_HEIGHT)
     root.title(
@@ -153,18 +151,14 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
     )
     root.configure()
     root.protocol("WM_DELETE_WINDOW", lambda: destroy())
-
     source_label = ctk.CTkLabel(root, text=None)
     source_label.place(relx=0.1, rely=0.05, relwidth=0.275, relheight=0.225)
-
     target_label = ctk.CTkLabel(root, text=None)
     target_label.place(relx=0.6, rely=0.05, relwidth=0.275, relheight=0.225)
-
     select_face_button = ctk.CTkButton(
         root, text=_("Select a face"), cursor="hand2", command=lambda: select_source_path()
     )
     select_face_button.place(relx=0.1, rely=0.30, relwidth=0.3, relheight=0.1)
-
     swap_faces_button = ctk.CTkButton(
         root, text="↔", cursor="hand2", command=lambda: swap_faces_paths()
     )
@@ -778,19 +772,32 @@ def check_and_ignore_nsfw(target, destroy: Callable = None) -> bool:
         return False
 
 
-def fit_image_to_size(image, width: int, height: int):
+def fit_image_to_size(image, width: int = None, height: int = None):
+    if image is None:
+        raise ValueError("Image is None")
+
+    h, w = image.shape[:2]
+
+    # Если размеры не заданы — возвращаем оригинал
     if width is None and height is None:
         return image
-    h, w, _ = image.shape
-    ratio_h = 0.0
-    ratio_w = 0.0
-    if width > height:
-        ratio_h = height / h
+
+    # Вычисляем коэффициенты масштабирования
+    ratio_w = width / w if width else None
+    ratio_h = height / h if height else None
+
+    # Если заданы оба размера — берём минимальный, чтобы вместилось
+    if ratio_w is not None and ratio_h is not None:
+        ratio = min(ratio_w, ratio_h)
     else:
-        ratio_w = width / w
-    ratio = max(ratio_w, ratio_h)
-    new_size = (int(ratio * w), int(ratio * h))
-    return cv2.resize(image, dsize=new_size)
+        ratio = ratio_w if ratio_w is not None else ratio_h
+
+    # Новые размеры должны быть >=1
+    new_w = max(1, int(w * ratio))
+    new_h = max(1, int(h * ratio))
+
+    return cv2.resize(image, (new_w, new_h))
+
 
 
 def render_image_preview(image_path: str, size: Tuple[int, int]) -> ctk.CTkImage:
@@ -912,6 +919,26 @@ def get_available_cameras():
         except Exception as e:
             print(f"Error detecting cameras: {str(e)}")
             return [], ["No cameras found"]
+    elif platform.system() == "Linux":
+        camera_indices = []
+        camera_names = []
+        for dev in sorted(os.listdir("/dev")):
+            if dev.startswith("video"):
+                try:
+                    idx = int(dev.replace("video", ""))
+                except ValueError:
+                    continue
+
+                cap = cv2.VideoCapture(idx, cv2.CAP_V4L2)
+                if cap.isOpened():
+                    camera_indices.append(idx)
+                    camera_names.append(f"/dev/{dev}")
+                    cap.release()
+
+        if not camera_names:
+            return [], ["No cameras found"]
+
+        return camera_indices, camera_names
     else:
         # Unix-like systems (Linux/Mac) camera detection
         camera_indices = []

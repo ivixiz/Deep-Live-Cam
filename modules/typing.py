@@ -1,7 +1,6 @@
-from typing import Any
+from typing import TypeAlias
+import numpy as np
+from insightface.app.common import Face as InsightFace
 
-from insightface.app.common import Face
-import numpy
-
-Face = Face
-Frame = numpy.ndarray[Any, Any]
+Frame: TypeAlias = np.ndarray
+Face: TypeAlias = InsightFace
