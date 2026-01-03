@@ -1,5 +1,4 @@
-# --- START OF FILE globals.py ---
-
+#globals.py
 import os
 from typing import List, Dict, Any
 
@@ -19,6 +18,15 @@ simple_map: Dict[str, Any] = {}             # Stores simplified map (embeddings/
 source_path: str | None = None
 target_path: str | None = None
 output_path: str | None = None
+model_path:  str | None = None
+
+FACE_SWAPPER: Any = None
+
+abs_dir = os.path.dirname(os.path.abspath(__file__))  # modules/
+project_root = os.path.dirname(abs_dir)  # Deep-Live-Cam/
+models_dir = os.path.join(project_root, "models")
+resources_dir = os.path.join(project_root, "resources")
+
 
 # Processing Options
 frame_processors: List[str] = []
@@ -31,6 +39,7 @@ poisson_blend: bool = False      # Enable Poisson Blending for smoother face swa
 color_correction: bool = False   # Enable color correction (implementation specific)
 nsfw_filter: bool = False
 
+
 # Video Output Options
 video_encoder: str | None = None
 video_quality: int | None = None # Typically a CRF value or bitrate
@@ -41,6 +50,7 @@ live_resizable: bool = True
 camera_input_combobox: Any | None = None # Placeholder for UI element if needed
 webcam_preview_running: bool = False
 show_fps: bool = False
+source_face_update: bool = False
 
 # System Configuration
 max_memory: int | None = None        # Memory limit in GB? (Needs clarification)
@@ -49,13 +59,33 @@ execution_threads: int | None = None # Number of threads for CPU execution
 headless: bool | None = None         # Run without UI?
 log_level: str = "error"             # Logging level (e.g., 'debug', 'info', 'warning', 'error')
 
+DEFAULT_MODEL_NAME = (
+    "inswapper_128_fp16.onnx"
+    if "CUDAExecutionProvider" in execution_providers
+    else "inswapper_128.onnx"
+)
+
 # Face Processor UI Toggles (Example)
 fp_ui: Dict[str, bool] = {"face_enhancer": False}
 
 # Face Swapper Specific Options
 face_swapper_enabled: bool = True # General toggle for the swapper processor
+
 opacity: float = 1.0              # Blend factor for the swapped face (0.0-1.0)
 sharpness: float = 0.0            # Sharpness enhancement for swapped face (0.0-1.0+)
+
+vcam_width: int = 640
+vcam_height: int = 480
+vcam_fps: int = 30
+vcam_video_nr: int = 4
+vcam_card_label: str = "DLC Webcam"
+vcam_device: str = None
+# "vcam_width": getattr(modules.globals, "vcam_width", 640),
+# "vcam_height": getattr(modules.globals, "vcam_height", 480),
+# "vcam_fps": getattr(modules.globals, "vcam_fps", 30),
+# "vcam_video_nr": getattr(modules.globals, "vcam_video_nr", 4),
+# "vcam_card_label": getattr(modules.globals, "vcam_card_label", "DLC Webcam"),
+# "vcam_device": getattr(modules.globals, "vcam_device", None),
 
 # Mouth Mask Options
 mouth_mask: bool = False           # Enable mouth area masking/pasting

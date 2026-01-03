@@ -61,6 +61,8 @@ def detect_fps(target_path: str) -> float:
 
 
 def extract_frames(target_path: str) -> None:
+    if not target_path:
+        return
     temp_directory_path = get_temp_directory_path(target_path)
     run_ffmpeg(
         [
@@ -98,6 +100,7 @@ def create_video(target_path: str, fps: float = 30.0) -> None:
 
 def restore_audio(target_path: str, output_path: str) -> None:
     temp_output_path = get_temp_output_path(target_path)
+    print(f"restore_audio({target_path},{output_path})")
     done = run_ffmpeg(
         [
             "-i",
@@ -119,11 +122,15 @@ def restore_audio(target_path: str, output_path: str) -> None:
 
 
 def get_temp_frame_paths(target_path: str) -> List[str]:
+    if not target_path:
+        return
     temp_directory_path = get_temp_directory_path(target_path)
     return glob.glob((os.path.join(glob.escape(temp_directory_path), "*.png")))
 
 
 def get_temp_directory_path(target_path: str) -> str:
+    if not target_path:
+        return
     target_name, _ = os.path.splitext(os.path.basename(target_path))
     target_directory_path = os.path.dirname(target_path)
     return os.path.join(target_directory_path, TEMP_DIRECTORY, target_name)
@@ -146,6 +153,8 @@ def normalize_output_path(source_path: str, target_path: str, output_path: str) 
 
 
 def create_temp(target_path: str) -> None:
+    if not target_path:
+        return
     temp_directory_path = get_temp_directory_path(target_path)
     Path(temp_directory_path).mkdir(parents=True, exist_ok=True)
 
@@ -168,7 +177,9 @@ def clean_temp(target_path: str) -> None:
 
 
 def has_image_extension(image_path: str) -> bool:
-    return image_path.lower().endswith(("png", "jpg", "jpeg"))
+    if not image_path:
+        return False
+    return image_path.lower().endswith((".png", ".jpg", ".jpeg"))
 
 
 def is_image(image_path: str) -> bool:

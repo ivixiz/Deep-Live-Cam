@@ -1,3 +1,4 @@
+# processors/frame/core.py
 import sys
 import importlib
 from concurrent.futures import ThreadPoolExecutor
@@ -77,6 +78,8 @@ def multi_process_frame(source_path: str, temp_frame_paths: List[str], process_f
 
 
 def process_video(source_path: str, frame_paths: list[str], process_frames: Callable[[str, List[str], Any], None]) -> None:
+    if not source_path:
+        return
     progress_bar_format = '{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}{postfix}]'
     total = len(frame_paths)
     with tqdm(total=total, desc='Processing', unit='frame', dynamic_ncols=True, bar_format=progress_bar_format) as progress:

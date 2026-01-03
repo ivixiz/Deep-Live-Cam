@@ -19,7 +19,6 @@ import os
 from collections import deque
 import time
 
-FACE_SWAPPER = None
 THREAD_LOCK = threading.Lock()
 NAME = "DLC.FACE-SWAPPER"
 
@@ -37,13 +36,8 @@ FRAME_SKIP_COUNTER = 0
 ADAPTIVE_QUALITY = True
 # --- END: Mac M1-M5 Optimizations ---
 
-abs_dir = os.path.dirname(os.path.abspath(__file__))
-models_dir = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(abs_dir))), "models"
-)
-
 def pre_check() -> bool:
-    download_directory_path = abs_dir
+    download_directory_path = modules.globals.abs_dir
     conditional_download(
         download_directory_path,
         [
@@ -55,7 +49,7 @@ def pre_check() -> bool:
 
 def pre_start() -> bool:
     # Simplified pre_start, assuming checks happen before calling process functions
-    model_path = os.path.join(models_dir, "inswapper_128_fp16.onnx")
+    model_path = os.path.join(modules.globals.models_dir, "inswapper_128_fp16.onnx")
     if not os.path.exists(model_path):
         update_status(f"Model not found: {model_path}. Please download it.", NAME)
         return False
@@ -70,50 +64,56 @@ def pre_start() -> bool:
 
 
 def get_face_swapper() -> Any:
-    global FACE_SWAPPER
-
     with THREAD_LOCK:
-        if FACE_SWAPPER is None:
-            model_name = "inswapper_128.onnx"
-            if "CUDAExecutionProvider" in modules.globals.execution_providers:
-                model_name = "inswapper_128.onnx"
-            model_path = os.path.join(models_dir, model_name)
-            update_status(f"Loading face swapper model from: {model_path}", NAME)
+        if modules.globals.FACE_SWAPPER is None:
             try:
-                # Optimized provider configuration for Apple Silicon
+                model_path = modules.globals.model_path or os.path.join(modules.globals.models_dir, modules.globals.DEFAULT_MODEL_NAME)
+                update_status(f"Loading face swapper model from: {model_path}", NAME)
+            except Exception as e:
+                update_status(f"ERROR: Model not loaded: {e}")
+                return
+            
+            try:
                 providers_config = []
                 for p in modules.globals.execution_providers:
                     if p == "CoreMLExecutionProvider" and IS_APPLE_SILICON:
-                        # Enhanced CoreML configuration for M1-M5
                         providers_config.append((
                             "CoreMLExecutionProvider",
                             {
                                 "ModelFormat": "MLProgram",
-                                "MLComputeUnits": "ALL",  # Use Neural Engine + GPU + CPU
+                                "MLComputeUnits": "ALL",
                                 "SpecializationStrategy": "FastPrediction",
                                 "AllowLowPrecisionAccumulationOnGPU": 1,
                                 "EnableOnSubgraphs": 1,
                                 "RequireStaticShapes": 0,
-                                "MaximumCacheSize": 1024 * 1024 * 512,  # 512MB cache
+                                "MaximumCacheSize": 1024*1024*512,
                             }
                         ))
                     else:
                         providers_config.append(p)
                 
-                FACE_SWAPPER = insightface.model_zoo.get_model(
+                modules.globals.FACE_SWAPPER = insightface.model_zoo.get_model(
                     model_path,
-                    providers=providers_config,
+                    providers=providers_config
+                    #fp16=False
                 )
                 update_status("Face swapper model loaded successfully.", NAME)
-            except Exception as e:
-                update_status(f"Error loading face swapper model: {e}", NAME)
-                FACE_SWAPPER = None
-                return None
-    return FACE_SWAPPER
+                # sess = modules.globals.FACE_SWAPPER.session
+                # print("Providers:", sess.get_providers())
+                # print("Input:", sess.get_inputs()[0].name, sess.get_inputs()[0].type)
+                # print("Output:", sess.get_outputs()[0].type)
+                # model = modules.globals.FACE_SWAPPER
+                # print("mean:", getattr(model, "input_mean", None))
+                # print("std :", getattr(model, "input_std", None))
 
+            except Exception as e:
+                update_status(f"ERROR: loading face swapper model: {e}", NAME)
+                modules.globals.FACE_SWAPPER = None
+                return None
 
 def swap_face(source_face: Face, target_face: Face, temp_frame: Frame) -> Frame:
-    face_swapper = get_face_swapper()
+    get_face_swapper()
+    face_swapper = modules.globals.FACE_SWAPPER
     if face_swapper is None:
         update_status("Face swapper model not loaded or failed to load. Skipping swap.", NAME)
         return temp_frame
@@ -124,10 +124,12 @@ def swap_face(source_face: Face, target_face: Face, temp_frame: Frame) -> Frame:
     # Pre-swap Input Check with optimization
     if temp_frame.dtype != np.uint8:
         temp_frame = np.clip(temp_frame, 0, 255).astype(np.uint8)
-
+    
     # Apply the face swap with optimized memory handling
     try:
         # For Apple Silicon, use optimized inference
+        if not source_face:
+            return original_frame
         if IS_APPLE_SILICON:
             # Ensure contiguous memory layout for better performance
             temp_frame = np.ascontiguousarray(temp_frame)
@@ -154,7 +156,7 @@ def swap_face(source_face: Face, target_face: Face, temp_frame: Frame) -> Frame:
              try:
                  swapped_frame_raw = cv2.resize(swapped_frame_raw, (temp_frame.shape[1], temp_frame.shape[0]))
              except Exception as resize_e:
-                 # print(f"Error resizing swapped frame: {resize_e}") # Debug
+                 # print(f"ERROR: resizing swapped frame: {resize_e}") # Debug
                  return original_frame
 
         # Explicitly clip values to 0-255 and convert to uint8
@@ -163,7 +165,7 @@ def swap_face(source_face: Face, target_face: Face, temp_frame: Frame) -> Frame:
         # --- END: CRITICAL FIX FOR ORT 1.17 ---
 
     except Exception as e:
-        print(f"Error during face swap using face_swapper.get: {e}") # More specific error
+        print(f"ERROR: during face swap using face_swapper.get: {e}") # More specific error
         # import traceback
         # traceback.print_exc() # Print full traceback for debugging
         return original_frame # Return original if swap fails
@@ -542,14 +544,14 @@ def process_frames(
     # --- Pre-load source face only if needed (Simple Mode: map_faces=False) ---
     if not use_v2:
         if not source_path or not os.path.exists(source_path):
-            update_status(f"Error: Source path invalid or not provided for simple mode: {source_path}", NAME)
+            update_status(f"ERROR:  Source path invalid or not provided for simple mode: {source_path}", NAME)
             # Log the error but allow proceeding; subsequent check will stop processing.
         else:
             try:
                 source_img = cv2.imread(source_path)
                 if source_img is None:
                     # Specific error for file reading failure
-                    update_status(f"Error reading source image file {source_path}. Please check the path and file integrity.", NAME)
+                    update_status(f"ERROR: reading source image file {source_path}. Please check the path and file integrity.", NAME)
                 else:
                     source_face = get_one_face(source_img)
                     if source_face is None:
@@ -560,7 +562,7 @@ def process_frames(
                 import traceback
                 print(f"{NAME}: Caught exception during source image processing for {source_path}:")
                 traceback.print_exc() # Print the full traceback
-                update_status(f"Error during source image reading or analysis {source_path}: {e}", NAME)
+                update_status(f"ERROR: during source image reading or analysis {source_path}: {e}", NAME)
                 # Log general exception during the process
 
     total_frames = len(temp_frame_paths)
@@ -645,10 +647,10 @@ def process_image(source_path: str, target_path: str, output_path: str) -> None:
     try:
         target_frame = cv2.imread(target_path)
         if target_frame is None:
-            update_status(f"Error: Could not read target image: {target_path}", NAME)
+            update_status(f"ERROR:  Could not read target image: {target_path}", NAME)
             return
     except Exception as read_e:
-        update_status(f"Error reading target image {target_path}: {read_e}", NAME)
+        update_status(f"ERROR: reading target image {target_path}: {read_e}", NAME)
         return
 
     result = None
@@ -664,14 +666,14 @@ def process_image(source_path: str, target_path: str, output_path: str) -> None:
             try:
                 source_img = cv2.imread(source_path)
                 if source_img is None:
-                    update_status(f"Error: Could not read source image: {source_path}", NAME)
+                    update_status(f"ERROR:  Could not read source image: {source_path}", NAME)
                     return
                 source_face = get_one_face(source_img)
                 if not source_face:
-                    update_status(f"Error: No face found in source image: {source_path}", NAME)
+                    update_status(f"ERROR:  No face found in source image: {source_path}", NAME)
                     return
             except Exception as src_e:
-                 update_status(f"Error reading or analyzing source image {source_path}: {src_e}", NAME)
+                 update_status(f"ERROR: reading or analyzing source image {source_path}: {src_e}", NAME)
                  return
 
             result = process_frame(source_face, target_frame)
@@ -682,13 +684,13 @@ def process_image(source_path: str, target_path: str, output_path: str) -> None:
             if write_success:
                 update_status(f"Output image saved to: {output_path}", NAME)
             else:
-                update_status(f"Error: Failed to write output image to {output_path}", NAME)
+                update_status(f"ERROR:  Failed to write output image to {output_path}", NAME)
         else:
             # This case might occur if process_frame/v2 returns None unexpectedly
             update_status("Image processing failed (result was None).", NAME)
 
     except Exception as proc_e:
-         update_status(f"Error during image processing: {proc_e}", NAME)
+         update_status(f"ERROR: during image processing: {proc_e}", NAME)
          # import traceback
          # traceback.print_exc()
 
@@ -842,7 +844,7 @@ def create_lower_mouth_mask(
         # print(f"Warning: Landmark index out of bounds during mouth mask creation: {idx_e}") # Optional debug
         pass
     except Exception as e:
-        print(f"Error in create_lower_mouth_mask: {e}") # Print unexpected errors
+        print(f"ERROR: in create_lower_mouth_mask: {e}") # Print unexpected errors
         # import traceback
         # traceback.print_exc()
         pass
@@ -888,7 +890,7 @@ def draw_mouth_mask_visualization(
          safe_polygon[:, 1] = np.clip(safe_polygon[:, 1], 0, height - 1)
          cv2.polylines(vis_frame, [safe_polygon.astype(np.int32)], isClosed=True, color=(0, 255, 0), thickness=2)
     except Exception as e:
-        print(f"Error drawing polygon for visualization: {e}") # Optional debug
+        print(f"ERROR: drawing polygon for visualization: {e}") # Optional debug
         pass
 
     # Optional: Draw bounding box (red rectangle)
@@ -901,7 +903,7 @@ def draw_mouth_mask_visualization(
         cv2.putText(vis_frame, "Mouth Mask", (label_pos_x, label_pos_y),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
     except Exception as e:
-        # print(f"Error drawing text for visualization: {e}") # Optional debug
+        # print(f"ERROR: drawing text for visualization: {e}") # Optional debug
         pass
 
 
@@ -1053,7 +1055,7 @@ def apply_mouth_area(
             pass # Don't modify frame if it's not BGR
 
     except Exception as e:
-        print(f"Error applying mouth area: {e}") # Optional debug
+        print(f"ERROR: applying mouth area: {e}") # Optional debug
         # import traceback
         # traceback.print_exc()
         pass # Don't crash, just return the frame as is
@@ -1080,7 +1082,7 @@ def create_face_mask(face: Face, frame: Frame) -> np.ndarray:
                  return mask
              cv2.fillConvexPoly(mask, hull.astype(np.int32), 255)
         except Exception as hull_e:
-             print(f"Error creating convex hull for face mask: {hull_e}")
+             print(f"ERROR: creating convex hull for face mask: {hull_e}")
              return mask # Return empty mask on error
         blur_k_size = getattr(modules.globals, "face_mask_blur", 31) # Default 31
         blur_k_size = max(1, blur_k_size // 2 * 2 + 1) # Ensure odd and positive
@@ -1088,7 +1090,7 @@ def create_face_mask(face: Face, frame: Frame) -> np.ndarray:
     except IndexError:
         pass
     except Exception as e:
-        print(f"Error creating face mask: {e}") # Print unexpected errors
+        print(f"ERROR: creating face mask: {e}") # Print unexpected errors
         pass
 
     return mask # Return uint8 mask

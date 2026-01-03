@@ -1,3 +1,4 @@
+#core.py
 import os
 import sys
 # single thread doubles cuda performance - needs to be set before torch import
@@ -18,6 +19,7 @@ import tensorflow
 import modules.globals
 import modules.metadata
 import modules.ui as ui
+from PyQt6.QtWidgets import QApplication
 from modules.processors.frame.core import get_frame_processors_modules
 from modules.utilities import has_image_extension, is_image, is_video, detect_fps, create_video, extract_frames, get_temp_frame_paths, restore_audio, create_temp, move_temp, clean_temp, normalize_output_path
 
@@ -179,6 +181,10 @@ def start() -> None:
     for frame_processor in get_frame_processors_modules(modules.globals.frame_processors):
         if not frame_processor.pre_start():
             return
+    
+    if not modules.globals.target_path:
+        update_status('Select target_path')
+        return
     update_status('Processing...')
     # process image to image
     if has_image_extension(modules.globals.target_path):
@@ -252,8 +258,11 @@ def run() -> None:
         if not frame_processor.pre_check():
             return
     limit_resources()
+
     if modules.globals.headless:
         start()
     else:
-        window = ui.init(start, destroy, modules.globals.lang)
-        window.mainloop()
+        app = QApplication([])  
+        window = ui.MainWindow(start, destroy, modules.globals.lang)
+        window.show() 
+        app.exec() 
