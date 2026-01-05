@@ -1,0 +1,6 @@
+<RCC>
+    <qresource prefix="/icons">
+        <file>faceSwap_512x512.png</file>
+    </qresource>
+</RCC>
+

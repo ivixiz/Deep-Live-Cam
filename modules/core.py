@@ -15,7 +15,7 @@ import argparse
 import torch
 import onnxruntime
 import tensorflow
-
+from PyQt6.QtGui import QIcon
 import modules.globals
 import modules.metadata
 import modules.ui as ui
@@ -177,11 +177,10 @@ def update_status(message: str, scope: str = 'DLC.CORE') -> None:
     if not modules.globals.headless:
         ui.update_status(message)
 
-def start() -> None:
-    for frame_processor in get_frame_processors_modules(modules.globals.frame_processors):
-        if not frame_processor.pre_start():
+def start() -> None: 
+    for frame_processor in get_frame_processors_modules(modules.globals.frame_processors): 
+        if not frame_processor.pre_start(): 
             return
-    
     if not modules.globals.target_path:
         update_status('Select target_path')
         return
@@ -245,9 +244,12 @@ def start() -> None:
 
 
 def destroy(to_quit=True) -> None:
+    print("destroy")
     if modules.globals.target_path:
         clean_temp(modules.globals.target_path)
-    if to_quit: quit()
+    if to_quit: 
+        print("quit")
+        quit()
 
 
 def run() -> None:
@@ -263,6 +265,9 @@ def run() -> None:
         start()
     else:
         app = QApplication([])  
+        app.setWindowIcon(
+            QIcon("resources/icons/faceSwap_512x512.png")
+        )
         window = ui.MainWindow(start, destroy, modules.globals.lang)
         window.show() 
         app.exec() 

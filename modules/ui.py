@@ -14,7 +14,6 @@ from PyQt6.QtWidgets import (
     QWidgetItem, QSizePolicy, QGridLayout, QLineEdit, QSpinBox, QFormLayout
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal , QThread
-
 from PyQt6.QtGui import QPixmap, QImage
 
 import cv2
@@ -45,12 +44,12 @@ if platform.system() == "Windows":
 else:
     FilterGraph = None
 
-# --- Константы / глобальные переменные ---
+
 ROOT_WIDTH = 400
 ROOT_HEIGHT = 400
 
-PREVIEW_MAX_HEIGHT = 700
-PREVIEW_MAX_WIDTH = 1200
+PREVIEW_MAX_HEIGHT = 600
+PREVIEW_MAX_WIDTH = 600
 PREVIEW_DEFAULT_WIDTH = 960
 PREVIEW_DEFAULT_HEIGHT = 540
 
@@ -145,28 +144,42 @@ def fit_image_to_size(image, width: int = None, height: int = None):
     new_w = max(1, int(w * ratio))
     new_h = max(1, int(h * ratio))
     return cv2.resize(image, (new_w, new_h))
-def pil_to_qpixmap(pil_img: Image.Image) -> QPixmap:
-    qimg = ImageQt.ImageQt(pil_img)
-    return QPixmap.fromImage(qimg)
-def render_image_preview_qpixmap(image_path: str, size: Tuple[int, int]) -> QPixmap:
-    image = Image.open(image_path).convert("RGBA")
-    if size:
-        image = ImageOps.fit(image, size, Image.LANCZOS)
-    return pil_to_qpixmap(image)
-def render_video_preview_qpixmap(video_path: str, size: Tuple[int, int], frame_number: int = 0) -> QPixmap:
-    cap = cv2.VideoCapture(video_path)
-    if frame_number:
-        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
-    has_frame, frame = cap.read()
-    if has_frame:
-        image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-        if size:
-            image = ImageOps.fit(image, size, Image.LANCZOS)
-        p = pil_to_qpixmap(image)
+def render_preview(path: str,size: Tuple[int, int],frame_number: int = 0,) -> QPixmap:
+    if not path or not os.path.isfile(path):
+        return QPixmap()
+    # ---------- LOAD ----------
+    if is_image(path):
+        frame = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+        if frame is None:
+            return QPixmap()
+    elif is_video(path):
+        cap = cv2.VideoCapture(path)
+        if frame_number:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
+        ok, frame = cap.read()
         cap.release()
-        return p
-    cap.release()
-    return QPixmap()
+        if not ok or frame is None:
+            return QPixmap()
+    else:
+        return QPixmap()
+    # ---------- NORMALIZE FORMAT ----------
+    if frame.ndim == 2:# GRAY → BGR
+        frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+        fmt = QImage.Format.Format_BGR888
+    elif frame.shape[2] == 4:# BGRA → RGBA
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2RGBA)
+        fmt = QImage.Format.Format_RGBA8888
+    else:# BGR
+        fmt = QImage.Format.Format_BGR888
+    h, w, ch = frame.shape
+    bytes_per_line = ch * w
+    qimg = QImage(frame.data, w,h,bytes_per_line,fmt)
+    if size:
+        qimg = qimg.scaled(size[0],size[1],
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+    return QPixmap.fromImage(qimg)
 def get_available_cameras():
     if platform.system() == "Windows" and FilterGraph is not None:
         try:
@@ -242,6 +255,7 @@ class ClickableLabel(QLabel):
 class MainWindow(QWidget):
     def __init__(self, start: Callable[[], None], destroy: Callable[[], None], lang: str):
         super().__init__()
+
         self.lang_manager = LanguageManager(lang)
         self._ = self.lang_manager._
         load_switch_states()
@@ -283,13 +297,14 @@ class MainWindow(QWidget):
         self.show_fps_cb = self.make_checkbox("show_fps", "Show FPS", "global")
         self.mouth_mask_cb = self.make_checkbox("mouth_mask", "Mouth Mask", "global")
         self.show_mouth_mask_box_cb = self.make_checkbox("show_mouth_mask_box", "Show Mouth Mask Box", "global")
+        self.live_mirror = self.make_checkbox("live_mirror", "Mirror", "global")
 
         # ---------- add to grid ----------
         checkboxes = [
             self.keep_fps_cb, self.keep_frames_cb, self.enhancer_cb,
             self.keep_audio_cb, self.many_faces_cb, self.color_correction_cb,
             self.map_faces_cb, self.poisson_blend_cb, self.show_fps_cb,
-            self.mouth_mask_cb, self.show_mouth_mask_box_cb
+            self.mouth_mask_cb, self.show_mouth_mask_box_cb, self.live_mirror
         ]
 
         grid = QGridLayout()
@@ -327,20 +342,20 @@ class MainWindow(QWidget):
         self.transparency_slider = QSlider(Qt.Orientation.Horizontal)
         self.transparency_slider.setRange(0, 100)
         self.transparency_slider.setValue(int(getattr(modules.globals, "opacity", 1.0) * 100))
-        self.transparency_slider.valueChanged.connect(self.on_transparency_change)
+        self.transparency_slider.valueChanged.connect(self._on_transparency_change)
         left_bot_col.addWidget(self.transparency_slider)
 
         left_bot_col.addWidget(QLabel("Sharpness"))
         self.sharpness_slider = QSlider(Qt.Orientation.Horizontal)
         self.sharpness_slider.setRange(0, 50)  # *0.1 mapping
         self.sharpness_slider.setValue(int(getattr(modules.globals, "sharpness", 0.0) * 10))
-        self.sharpness_slider.valueChanged.connect(self.on_sharpness_change)
+        self.sharpness_slider.valueChanged.connect(self._on_sharpness_change)
         left_bot_col.addWidget(self.sharpness_slider)
 
         buttons_col = QVBoxLayout()
 
         button_width = 120
-        button_height = 25
+        button_height = 40
 
         self.live_btn = QPushButton(self._("Live"))
         self.live_btn.clicked.connect(self.open_webcam_preview)
@@ -352,15 +367,16 @@ class MainWindow(QWidget):
         self.start_btn.setFixedSize(button_width, button_height)
         buttons_col.addWidget(self.start_btn)
 
-        self.stop_btn = QPushButton(self._("Close All"))
-        self.stop_btn.clicked.connect(self.destroy_cb)
-        self.stop_btn.setFixedSize(button_width, button_height)
-        buttons_col.addWidget(self.stop_btn)
-
         self.preview_btn = QPushButton(self._("Preview"))
         self.preview_btn.clicked.connect(self.toggle_preview)
         self.preview_btn.setFixedSize(button_width, button_height)
         buttons_col.addWidget(self.preview_btn)
+
+        self.stop_btn = QPushButton(self._("Close All"))
+        self.stop_btn.clicked.connect(lambda: self.destroy_cb())
+        self.stop_btn.setFixedSize(button_width, button_height)
+        buttons_col.addWidget(self.stop_btn)
+
 
         # status and link
         self.status_label = QLabel("")
@@ -599,7 +615,6 @@ class MainWindow(QWidget):
         save_switch_states()
     def update_tumbler(self, key, value):
         modules.globals.fp_ui[key] = value
-        print(f"fp_ui[{key}] = {value}")
         save_switch_states()
         if hasattr(self, "webcam_preview_dialog") and \
         self.webcam_preview_dialog is not None and \
@@ -611,7 +626,7 @@ class MainWindow(QWidget):
     def toggle_mapper(self, enabled: bool):
         modules.globals.map_faces = enabled
         save_switch_states()
-    def on_transparency_change(self, value):
+    def _on_transparency_change(self, value):
         val = value / 100.0
         modules.globals.opacity = val
         save_switch_states()
@@ -624,7 +639,7 @@ class MainWindow(QWidget):
         else:
             modules.globals.face_swapper_enabled = True
             self.status_label.setText(f"Transparency set to {int(val * 100)}%")
-    def on_sharpness_change(self, value):
+    def _on_sharpness_change(self, value):
         val = value / 10.0
         modules.globals.sharpness = val
         save_switch_states()
@@ -635,9 +650,7 @@ class MainWindow(QWidget):
         if self.start_cb is None:
             print("start_cb is None! Cannot call start function.")
             return
-        print("Calling start_cb()...")
         self.start_cb()
-        print("start_cb() end")
     def select_source_path(self):
         global RECENT_SOURCE
         file_filter = "Images (*.png *.jpg *.jpeg *.bmp *.gif *.tiff)"
@@ -648,7 +661,7 @@ class MainWindow(QWidget):
         if source_path and os.path.isfile(source_path):
             RECENT_SOURCE = source_path
             modules.globals.source_path = source_path
-            pixmap = render_image_preview_qpixmap(source_path, (200, 200))
+            pixmap = render_preview(source_path, (200, 200))
             self.source_label.setPixmap(pixmap)
             modules.globals.source_face_update = True
             modules.globals.FACE_SWAPPER = None 
@@ -682,9 +695,9 @@ class MainWindow(QWidget):
             modules.globals.target_path = target_path
             print(f"target_path = {target_path}")
             if is_image(target_path):
-                self.target_label.setPixmap(render_image_preview_qpixmap(target_path, (200,200)))
+                self.target_label.setPixmap(render_preview(target_path, (200,200)))
             elif is_video(target_path):
-                pix = render_video_preview_qpixmap(target_path, (200,200))
+                pix = render_preview(target_path, (200,200))
                 self.target_label.setPixmap(pix)
             else:
                 modules.globals.target_path = None
@@ -715,11 +728,11 @@ class MainWindow(QWidget):
         RECENT_DIRECTORY_SOURCE = os.path.dirname(modules.globals.source_path)
         RECENT_DIRECTORY_TARGET = os.path.dirname(modules.globals.target_path)
         # update previews
-        self.source_label.setPixmap(render_image_preview_qpixmap(modules.globals.source_path, (200,200)))
-        self.target_label.setPixmap(render_image_preview_qpixmap(modules.globals.target_path, (200,200)))
+        self.source_label.setPixmap(render_preview(modules.globals.source_path, (200,200)))
+        self.target_label.setPixmap(render_preview(modules.globals.target_path, (200,200)))
     def toggle_preview(self):
-        if not modules.globals.target_path or modules.globals.source_path:
-            self.status_label.setText(f"Select target_path and source_path")
+        if not modules.globals.source_path or not modules.globals.target_path:
+            self.status_label.setText("Select source and target first")
             return
         if self.preview_dialog.isVisible():
             self.preview_dialog.hide()
@@ -728,6 +741,7 @@ class MainWindow(QWidget):
             self.update_preview()    
     def init_preview(self):
         # if video target, configure slider
+        self.status_label.setText("Processing...")
         if is_image(modules.globals.target_path):
             if self.preview_slider.parent() is not None:
                 self.preview_dialog_layout.removeWidget(self.preview_slider)
@@ -740,28 +754,28 @@ class MainWindow(QWidget):
                 self.preview_slider.show()
             self.preview_slider.setValue(0)
     def update_preview(self, value=0):
-        # frame_number passed by slider valueChanged
         if not (modules.globals.source_path and modules.globals.target_path):
             return
         self.status_label.setText("Processing...")
         frame_num = int(value)
         temp_frame = get_video_frame(modules.globals.target_path, frame_num)
-        # if modules.globals.nsfw_filter:
-            # check_and_ignore_nsfw is not coupled to GUI here; keep behavior similar.
-            # from numpy import ndarray
-            # from modules.predicter import predict_image, predict_video, predict_frame
-            # check_nsfw = predict_image if has_image_extension(modules.globals.target_path) else predict_video
-            # if check_nsfw and check_nsfw(modules.globals.target_path):
-            #     self.status_label.setText("Processing ignored!")
-            #     return
-        for frame_processor in get_frame_processors_modules(modules.globals.frame_processors):
-            src_face = get_one_face(cv2.imread(modules.globals.source_path)) if modules.globals.source_path else None
+        if temp_frame is None:
+            return
+        src_face = get_one_face(cv2.imread(modules.globals.source_path))
+        for frame_processor in get_frame_processors_modules(
+            modules.globals.frame_processors
+        ):
             temp_frame = frame_processor.process_frame(src_face, temp_frame)
-        img = Image.fromarray(cv2.cvtColor(temp_frame, cv2.COLOR_BGR2RGB))
-        img = ImageOps.contain(img, (PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT), Image.LANCZOS)
-        pix = pil_to_qpixmap(img)
-        self.preview_image_label.setPixmap(pix)
+        temp_frame = fit_image_to_size(
+            temp_frame, PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT
+        )
+        h, w, ch = temp_frame.shape
+        bytes_per_line = ch * w
+        qimg = QImage(temp_frame.data,w,h,bytes_per_line,QImage.Format.Format_RGB888,)
+        self.preview_image_label.setPixmap(QPixmap.fromImage(qimg))
         self.preview_dialog.show()
+        self.preview_dialog.raise_()
+        self.preview_dialog.activateWindow()
         self.status_label.setText("Processing succeed!")
     def open_webcam_preview(self):
         if not self.live_running:
@@ -944,9 +958,10 @@ class WebcamPreviewDialog(QDialog):
         frame = fit_image_to_size(frame, self.width(), self.height())
         
         if modules.globals.show_fps:
-            cv2.putText(frame, f"FPS: {self.fps:.1f}", (20, 40),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            cv2.putText(frame, f"FPS: {self.fps:.1f}", (10, 15),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
         h, w, ch = frame.shape
         img = QImage(frame.data, w, h, ch*w, QImage.Format.Format_BGR888)
         self.label.setPixmap(QPixmap.fromImage(img))
+
 

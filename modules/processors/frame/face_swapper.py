@@ -1,3 +1,4 @@
+#processors/frame/face_swapper.py
 from typing import Any, List, Optional
 import cv2
 import insightface
@@ -56,6 +57,7 @@ def pre_start() -> bool:
 
     # Try to get the face swapper to ensure it loads correctly
     if get_face_swapper() is None:
+        print("get_face_swapper() is None")
         # Error message already printed within get_face_swapper
         return False
 
@@ -91,7 +93,6 @@ def get_face_swapper() -> Any:
                         ))
                     else:
                         providers_config.append(p)
-                
                 modules.globals.FACE_SWAPPER = insightface.model_zoo.get_model(
                     model_path,
                     providers=providers_config
@@ -105,11 +106,11 @@ def get_face_swapper() -> Any:
                 # model = modules.globals.FACE_SWAPPER
                 # print("mean:", getattr(model, "input_mean", None))
                 # print("std :", getattr(model, "input_std", None))
-
             except Exception as e:
                 update_status(f"ERROR: loading face swapper model: {e}", NAME)
                 modules.globals.FACE_SWAPPER = None
                 return None
+    return True
 
 def swap_face(source_face: Face, target_face: Face, temp_frame: Frame) -> Frame:
     get_face_swapper()
