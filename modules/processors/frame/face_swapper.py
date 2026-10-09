@@ -20,6 +20,8 @@ import os
 from collections import deque
 import time
 
+
+
 THREAD_LOCK = threading.Lock()
 NAME = "DLC.FACE-SWAPPER"
 
@@ -118,29 +120,18 @@ def swap_face(source_face: Face, target_face: Face, temp_frame: Frame) -> Frame:
     if face_swapper is None:
         update_status("Face swapper model not loaded or failed to load. Skipping swap.", NAME)
         return temp_frame
-
-    # Store a copy of the original frame before swapping for opacity blending
     original_frame = temp_frame.copy()
-
-    # Pre-swap Input Check with optimization
     if temp_frame.dtype != np.uint8:
         temp_frame = np.clip(temp_frame, 0, 255).astype(np.uint8)
-    
-    # Apply the face swap with optimized memory handling
     try:
-        # For Apple Silicon, use optimized inference
         if not source_face:
             return original_frame
         if IS_APPLE_SILICON:
-            # Ensure contiguous memory layout for better performance
             temp_frame = np.ascontiguousarray(temp_frame)
         
         swapped_frame_raw = face_swapper.get(
             temp_frame, target_face, source_face, paste_back=True
         )
-
-        # --- START: CRITICAL FIX FOR ORT 1.17 ---
-        # Check the output type and range from the model
         if swapped_frame_raw is None:
              # print("Warning: face_swapper.get returned None.") # Debug
              return original_frame # Return original if swap somehow failed internally
@@ -403,6 +394,8 @@ def process_frame(source_face: Face, temp_frame: Frame) -> Frame:
     final_frame = apply_post_processing(processed_frame, swapped_face_bboxes)
 
     return final_frame
+
+
 
 
 def process_frame_v2(temp_frame: Frame, temp_frame_path: str = "") -> Frame:

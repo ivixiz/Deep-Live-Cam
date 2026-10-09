@@ -1,4 +1,4 @@
-# ui.py
+# main_pyqt.py
 import os
 import time
 import json
@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
     QWidgetItem, QSizePolicy, QGridLayout, QLineEdit, QSpinBox, QFormLayout
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal , QThread
-from PyQt6.QtGui import QPixmap, QImage, QGuiApplication
+from PyQt6.QtGui import QPixmap, QImage
 
 import cv2
 
@@ -142,15 +142,6 @@ def fit_image_to_size(image, width: int = None, height: int = None):
     new_w = max(1, int(w * ratio))
     new_h = max(1, int(h * ratio))
     return cv2.resize(image, (new_w, new_h))
-def resize_keep_aspect_crop(frame, target_w, target_h):
-    h, w = frame.shape[:2]
-    scale = max(target_w / w, target_h / h)
-    new_w = int(w * scale)
-    new_h = int(h * scale)
-    resized = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
-    x = (new_w - target_w) // 2
-    y = (new_h - target_h) // 2
-    return resized[y:y+target_h, x:x+target_w]
 def render_preview(path: str,size: Tuple[int, int],frame_number: int = 0,) -> QPixmap:
     if not path or not os.path.isfile(path):
         return QPixmap()
@@ -442,115 +433,167 @@ class MainWindow(QWidget):
         dlg = QDialog(self)
         dlg.setWindowTitle(self._("Configure Virtual Camera"))
         dlg.setModal(True)
-
-        layout = QVBoxLayout(dlg)
+        layout = QVBoxLayout()
+        dlg.setLayout(layout)
         form = QFormLayout()
-
-        # --- Controls ---
-        width_spin = QSpinBox();  width_spin.setRange(1, 8192)
-        height_spin = QSpinBox(); height_spin.setRange(1, 8192)
-        fps_spin = QSpinBox();    fps_spin.setRange(1, 240)
-        device_spin = QSpinBox(); device_spin.setRange(1, 16)
-        video_nr_spin = QSpinBox(); video_nr_spin.setRange(0, 63)
-        card_label_edit = QLineEdit()
-        exclusive_caps_cb = QComboBox(); exclusive_caps_cb.addItems(["1", "0"])
-        max_buffers_spin = QSpinBox(); max_buffers_spin.setRange(1, 16)
-
-        # --- Defaults ---
-        width_spin.setValue(getattr(modules.globals, "vcam_width", 640))
-        height_spin.setValue(getattr(modules.globals, "vcam_height", 480))
-        fps_spin.setValue(getattr(modules.globals, "vcam_fps", 30))
-        device_spin.setValue(getattr(modules.globals, "vcam_device", 1))
-        video_nr_spin.setValue(getattr(modules.globals, "vcam_video_nr", 4))
-        card_label_edit.setText(getattr(modules.globals, "vcam_card_label", "DLC Webcam"))
-        exclusive_caps_cb.setCurrentIndex(0)
-        max_buffers_spin.setValue(2)
-
-        # --- Form ---
-        form.addRow("Width:", width_spin)
-        form.addRow("Height:", height_spin)
-        form.addRow("FPS:", fps_spin)
-        form.addRow("devices:", device_spin)
-        form.addRow("video_nr (/dev/videoX):", video_nr_spin)
-        form.addRow("card_label:", card_label_edit)
-        form.addRow("exclusive_caps (0/1):", exclusive_caps_cb)
-        form.addRow("max_buffers:", max_buffers_spin)
-
+        # width/height/fps
+        self.width_spin        = QSpinBox();  self.width_spin.setRange(1, 8192);   self.width_spin.setValue(getattr(modules.globals, "vcam_width", 640))
+        self.height_spin       = QSpinBox();  self.height_spin.setRange(1, 8192);  self.height_spin.setValue(getattr(modules.globals, "vcam_height", 480))
+        self.fps_spin          = QSpinBox();  self.fps_spin.setRange(1, 240);      self.fps_spin.setValue(getattr(modules.globals, "vcam_fps", 30))
+        self.device_spin      = QSpinBox();  self.device_spin.setRange(1, 16);   self.device_spin.setValue(1)
+        self.video_nr_spin     = QSpinBox();  self.video_nr_spin.setRange(0, 63);  self.video_nr_spin.setValue(getattr(modules.globals, "vcam_video_nr", 4))
+        self.card_label_edit   = QLineEdit(); self.card_label_edit.setText(getattr(modules.globals, "vcam_card_label", "DLC Webcam"))
+        exclusive_caps_cb = QComboBox(); exclusive_caps_cb.addItems(["0", "1"]); exclusive_caps_cb.setCurrentIndex(0)
+        max_buffers_spin  = QSpinBox();  max_buffers_spin.setRange(1, 16);       max_buffers_spin.setValue(2)
+        form.addRow(QLabel("Width:"), self.width_spin)
+        form.addRow(QLabel("Height:"), self.height_spin)
+        form.addRow(QLabel("FPS:"), self.fps_spin)
+        form.addRow(QLabel("devices:"), self.device_spin)
+        form.addRow(QLabel("video_nr (/dev/video4 <- 4):"), self.video_nr_spin)
+        form.addRow(QLabel("card_label:"), self.card_label_edit)
+        form.addRow(QLabel("exclusive_caps (0/1):"), exclusive_caps_cb)
+        form.addRow(QLabel("max_buffers:"), max_buffers_spin)
         layout.addLayout(form)
+  
+        def set_status(msg: str, error: bool = False):
+            status_label.setText(msg)
+            if error:
+                status_label.setStyleSheet("color: red;")
+            else:
+                status_label.setStyleSheet("color: gray;")
+        self.debounce_timer = QTimer()
+        self.debounce_timer.setSingleShot(True)
+        def save_vcam_settings():
+            modules.globals.vcam_width      = self.width_spin.value()
+            modules.globals.vcam_height     = self.height_spin.value()
+            modules.globals.vcam_fps        = self.fps_spin.value()
+            modules.globals.vcam_video_nr   = self.video_nr_spin.value()
+            modules.globals.vcam_card_label = self.card_label_edit.text().strip()
+            modules.globals.vcam_device     = self.device_spin.value()
+            save_switch_states()
+            set_status("Parameters saved", False)
+        self.debounce_timer.timeout.connect(save_vcam_settings)
+        def debounce(*args):
+            set_status("debounce...",False)
+            self.debounce_timer.start(1000)  
+        self.width_spin.valueChanged.connect(debounce)
+        self.height_spin.valueChanged.connect(debounce)
+        self.fps_spin.valueChanged.connect(debounce)
+        self.device_spin.valueChanged.connect(debounce)
+        self.video_nr_spin.valueChanged.connect(debounce)
+        self.card_label_edit.textChanged.connect(debounce)
+        
+        width = self.width_spin.value()
+        height = self.height_spin.value()
+        fps = self.fps_spin.value()
+        device = self.device_spin.value()
+        video_nr = self.video_nr_spin.value()
+        card_label = self.card_label_edit.text().strip()
+        exclusive_caps = exclusive_caps_cb.currentText()
+        max_buffers = max_buffers_spin.value()
 
-        # --- Generated command ---
-        layout.addWidget(QLabel(self._("Generated command (run in terminal as root):")))
-
-        command_edit = QLineEdit()
-        command_edit.setReadOnly(True)
-        command_edit.setMinimumHeight(32)
-        layout.addWidget(command_edit)
-
-        # --- Status ---
         status_label = QLabel("")
         status_label.setWordWrap(True)
         layout.addWidget(status_label)
-
-        def set_status(text, error=False):
-            status_label.setText(text)
-            status_label.setStyleSheet("color: red;" if error else "color: gray;")
-
-        # --- Helpers ---
-        def device_path(n: int) -> str:
-            return f"/dev/video{n}"
-        def build_command() -> str:
-            return (
-                "sudo rmmod v4l2loopback || true\n"
-                "sudo modprobe v4l2loopback "
-                f"devices={device_spin.value()} "
-                f"video_nr={video_nr_spin.value()} "
-                f"card_label=\"{card_label_edit.text().strip()}\" "
-                f"exclusive_caps={exclusive_caps_cb.currentText()} "
-                f"max_buffers={max_buffers_spin.value()}"
-            )
-
-        def update_command():
-            command_edit.setText(build_command())
-
-        def copy_command():
-            QGuiApplication.clipboard().setText(command_edit.text())
-            set_status(self._("Command copied to clipboard"))
-
-        def check_device():
-            path = device_path(video_nr_spin.value())
-            if os.path.exists(path):
-                set_status(self._("Device exists: ") + path)
-            else:
-                set_status(self._("Device not found: ") + path, True)
-
-        # --- Auto-update command ---
-        for w in (
-            width_spin, height_spin, fps_spin,
-            device_spin, video_nr_spin,
-            max_buffers_spin
-        ):
-            w.valueChanged.connect(update_command)
-
-        card_label_edit.textChanged.connect(update_command)
-        exclusive_caps_cb.currentIndexChanged.connect(update_command)
-
-        update_command()
-
-        # --- Buttons ---
         btn_row = QHBoxLayout()
-        copy_btn = QPushButton(self._("Copy command"))
+        apply_btn = QPushButton(self._("Apply (load module)"))
         test_btn = QPushButton(self._("Test / Check device"))
-        close_btn = QPushButton(self._("Close"))
-
-        btn_row.addWidget(copy_btn)
+        cancel_btn = QPushButton(self._("Close"))
+        btn_row.addWidget(apply_btn)
         btn_row.addWidget(test_btn)
-        btn_row.addWidget(close_btn)
+        btn_row.addWidget(cancel_btn)
         layout.addLayout(btn_row)
+        
+        def device_path(n: int) -> str:
+            return f"/dev/video{n}"           
+        def check_device_exists(n: int) -> bool:
+            return os.path.exists(device_path(n))
+        def build_modprobe_command(devices, video_nr, card_label, exclusive_caps, max_buffers):
+            cmd = (
+                f"modprobe v4l2loopback devices={devices} video_nr={video_nr} "
+                f"card_label=\"{card_label}\" exclusive_caps={exclusive_caps} max_buffers={max_buffers}"
+            )
+            return cmd
+        def run_command_as_root(cmd_shell: str) -> tuple[int, str]:
+            # Try pkexec if present
+            pkexec_path = shutil.which("pkexec")
+            try_cmds = []
+            if pkexec_path:
+                # pkexec runs a program; run sh -c "cmd"
+                try_cmds.append([pkexec_path, "bash", "-c", cmd_shell])
+            # fallback to sudo (note: this will prompt in terminal)
+            sudo_path = shutil.which("sudo")
+            if sudo_path:
+                try_cmds.append([sudo_path, "bash", "-c", cmd_shell])
 
-        copy_btn.clicked.connect(copy_command)
-        test_btn.clicked.connect(check_device)
-        close_btn.clicked.connect(dlg.close)
+            if not try_cmds:
+                return (1, "No pkexec or sudo found on PATH; cannot escalate privileges from GUI.")
 
+            last_out = ""
+            last_code = 1
+            for cmd in try_cmds:
+                try:
+                    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                    last_code = proc.returncode
+                    last_out = proc.stdout
+                    # If pkexec returns 0, success — don't try sudo
+                    if last_code == 0:
+                        break
+                except Exception as e:
+                    last_out = str(e)
+                    last_code = 1
+            return last_code, last_out
+        def apply_clicked():
+            if not card_label:
+                set_status("card_label cannot be empty")
+                return
+            # build shell command: rmmod (ignore errors) then modprobe
+            modprobe_cmd = build_modprobe_command(device, video_nr, card_label, exclusive_caps, max_buffers)
+            full_cmd = f"set -e; rmmod v4l2loopback || true; {modprobe_cmd}"
+            set_status(self._("Running commands, waiting for privilege prompt..."))
+            def worker():
+                rc, out = run_command_as_root(full_cmd)
+                if rc == 0:
+                    time.sleep(0.3)
+                    exists = check_device_exists(video_nr)
+                    if exists:
+                        def update_success():
+                            self.vcam_width = width
+                            self.vcam_height = height
+                            self.vcam_fps = fps
+                            self.vcam_video_nr = video_nr
+                            self.vcam_device = device_path(video_nr)
+                            self.vcam_card_label = card_label
+                            self.addoutdevbutt.setText(self.vcam_device)
+                            self.save_vcam_settings() 
+                            set_status(self._("v4l2loopback loaded successfully: ") + self.vcam_device)
+                            
+                        self.run_on_ui_thread(update_success)
+                    else:
+                        def update_no_device():
+                            set_status(self._("Module loaded but device not found: ") + device_path(video_nr), True)
+                        self.run_on_ui_thread(update_no_device)
+                else:
+                    def update_fail():
+                        set_status(self._("Command failed: ") + out.splitlines()[-10:], True)
+                    self.run_on_ui_thread(update_fail)
+            threading.Thread(target=worker, daemon=True).start()
+        def test_clicked():
+            video_nr = self.video_nr_spin.value()
+            if check_device_exists(video_nr):
+                set_status(self._("Device exists: ") + device_path(video_nr))
+            else:
+                set_status(self._("Device not found: ") + device_path(video_nr), True)
+        def close_clicked():
+            if check_device_exists(video_nr):
+                self.addoutdevbutt.setText(device_path(video_nr))
+            dlg.close()    
+        def run_on_ui_thread(fn):
+            QTimer.singleShot(0, fn)
+        self.run_on_ui_thread = run_on_ui_thread
+        apply_btn.clicked.connect(apply_clicked)
+        test_btn.clicked.connect(test_clicked)
+        cancel_btn.clicked.connect(close_clicked)
         dlg.exec()
     def make_checkbox(self, key: str, text: str, toggle_type: str = "global"):
         cb = QCheckBox(self._(text))
@@ -870,7 +913,7 @@ class WebcamVirtualThread(QThread):
         if not self.running:
             return
 
-        out = resize_keep_aspect_crop(frame, self.vcam_width, self.vcam_height)
+        out = cv2.resize(frame, (self.vcam_width, self.vcam_height))
         try:
             self.vcam.send(out)
             self.vcam.sleep_until_next_frame()
